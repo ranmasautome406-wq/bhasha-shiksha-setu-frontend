@@ -1,6 +1,6 @@
 // Bhasha Shiksha Setu - Frontend API configuration
 // Replace the URL below after deploying the separate backend.
-const API_BASE_URL = "https://YOUR-BACKEND-URL.onrender.com";
+const API_BASE_URL = "https://bhasha-shiksha-setu-backend.onrender.com";
 
 /* =========================================================
    Bhasha Shiksha Setu — shared frontend logic
