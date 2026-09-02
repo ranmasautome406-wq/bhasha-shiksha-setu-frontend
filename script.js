@@ -1,6 +1,8 @@
 // Bhasha Shiksha Setu - Frontend API configuration
 // Replace the URL below after deploying the separate backend.
-const API_BASE_URL = localStorage.getItem("bss_api_url") || "https://YOUR-BACKEND-URL.onrender.com";
+const API_BASE_URL =
+  localStorage.getItem("bss_api_url") ||
+  "https://YOUR-BACKEND-URL.onrender.com";
 
 /* =========================================================
    Bhasha Shiksha Setu — shared frontend logic
@@ -221,11 +223,20 @@ async function loadSiteConfig() {
 
 function populateLanguageSelects() {
   $$("select[data-langs], .lang-select").forEach(sel => {
-    if (sel.dataset.locked === "1") return;
-    sel.dataset.locked = "1";
-    const current = sel.value || localStorage.getItem("bss_lang") || "English";
-    sel.innerHTML = BSS_STATE.languages.map(l =>
-      `<option value="${escapeHtml(l)}" ${l === current ? "selected" : ""}>${escapeHtml(l)}</option>`).join("");
+    const saved = localStorage.getItem("bss_lang") || "English";
+    let current = sel.value || saved;
+
+    // Never leave the selector blank when the saved language is unavailable.
+    if (!BSS_STATE.languages.includes(current)) {
+      current = BSS_STATE.languages.includes(saved)
+        ? saved
+        : (BSS_STATE.languages[0] || "English");
+    }
+
+    sel.innerHTML = BSS_STATE.languages.map(lang =>
+      `<option value="${escapeHtml(lang)}">${escapeHtml(lang)}</option>`
+    ).join("");
+
     sel.value = current;
   });
 }
@@ -340,12 +351,89 @@ window.BSS_LESSONS = {
             <h2>${escapeHtml(l.title)}</h2>
             <p style="color:var(--muted);margin:10px 0 18px">${escapeHtml(l.description)}</p>
             ${(l.content_items || []).map(c => renderContentBlock(c)).join("")}
+
+            <div class="card" style="margin-top:20px">
+              <h3>🌐 Translate this lesson</h3>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">
+                <select id="lessonTargetLang" class="lang-select" data-langs></select>
+                <button class="btn btn-primary btn-sm"
+                  onclick="BSS_LESSONS.translateCurrent(${l.id})">
+                  Translate
+                </button>
+                <button id="lessonTranslationListen"
+                  class="btn btn-outline btn-sm"
+                  data-text=""
+                  data-language=""
+                  onclick="BSS_VOICE.listen(this)">
+                  🔊 Listen
+                </button>
+              </div>
+              <textarea id="lessonTranslationText"
+                rows="7"
+                style="width:100%;padding:12px;resize:vertical"
+                readonly
+                placeholder="Your translated lesson will appear here..."></textarea>
+            </div>
+
             <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:24px">
-              <button class="btn btn-accent" onclick="BSS_VOICE.listen(this)" data-text="${escapeHtml(l.title + ". " + l.description)}">🔊 Hear Explanation</button>
+              <button class="btn btn-accent" onclick="BSS_VOICE.listen(this)" data-text="${escapeHtml(l.title + ". " + l.description)}" data-language="${escapeHtml(localStorage.getItem("bss_lang") || "English")}">🔊 Hear Explanation</button>
               <button class="btn btn-primary" onclick="closeModal('lessonModal');BSS_AI.open('lesson', ${l.id})">🤖 Ask AI about this lesson</button>
             </div>
           </div>`;
+
+        populateLanguageSelects();
+        bindLanguagePreference();
+        const lessonLang = $("#lessonTargetLang");
+        if (lessonLang) {
+          lessonLang.value =
+            localStorage.getItem("bss_lang") || "Marathi";
+        }
       } catch (e) { host.innerHTML = `<div class="empty"><div class="big">⚠️</div>${escapeHtml(e.message)}</div>`; }
+    }
+  },
+
+  async translateCurrent(id) {
+    const target = $("#lessonTargetLang")?.value ||
+      localStorage.getItem("bss_lang") || "Marathi";
+    const output = $("#lessonTranslationText");
+
+    if (!output) return;
+
+    try {
+      output.value = "Translating…";
+
+      const lesson = await api(`/lessons/${id}`);
+      const source = lesson.language || "English";
+
+      const parts = [
+        lesson.title,
+        lesson.description,
+        ...(lesson.content_items || [])
+          .filter(c => c.type === "text")
+          .map(c => `${c.title || ""}\n${c.content || ""}`)
+      ].filter(Boolean);
+
+      const result = await api("/translate", {
+        method: "POST",
+        body: {
+          text: parts.join("\n\n"),
+          source_language: source,
+          target_language: target
+        }
+      });
+
+      output.value =
+        result?.translated_text ||
+        result?.translation ||
+        "Translation unavailable.";
+
+      const listen = $("#lessonTranslationListen");
+      if (listen) {
+        listen.dataset.text = output.value;
+        listen.dataset.language = target;
+      }
+    } catch (e) {
+      output.value = "⚠️ " + e.message;
     }
   },
 };
@@ -373,28 +461,135 @@ window.BSS_VOICE = {
   voiceFor(langName) {
     const codes = { English: "en", Marathi: "mr-IN", Hindi: "hi-IN", Gujarati: "gu-IN",
       Bengali: "bn-IN", Tamil: "ta-IN", Telugu: "te-IN", Kannada: "kn-IN",
-      Malayalam: "ml-IN", Punjabi: "pa-IN", Urdu: "ur-PK" };
+      Malayalam: "ml-IN", Punjabi: "pa-IN", Urdu: "ur-IN" };
     const code = codes[langName] || "en-IN";
     const voices = speechSynthesis.getVoices();
     return voices.find(v => v.lang === code) || voices.find(v => v.lang.startsWith(code.split("-")[0])) || null;
   },
-  speak(text, opts = {}) {
-    if (!this.supported) { toast("Read-aloud is not supported in this browser.", "warn"); return false; }
+  async speak(text, opts = {}) {
+    if (!text || !String(text).trim()) {
+      toast("Nothing to read yet.", "warn");
+      return false;
+    }
+
+    const language =
+      opts.language ||
+      localStorage.getItem("bss_lang") ||
+      "English";
+
+    // Prefer backend TTS so regional-language voices can be generated.
+    try {
+      const result = await api("/voice/tts", {
+        method: "POST",
+        body: { text: String(text), language }
+      });
+
+      if (result?.audio_base64) {
+        this.stop();
+
+        const audio = new Audio(
+          "data:audio/mpeg;base64," + result.audio_base64
+        );
+
+        this._audio = audio;
+        this._playing = true;
+
+        audio.onended = () => {
+          this._playing = false;
+          this._audio = null;
+          this._syncBtn();
+        };
+
+        audio.onerror = () => {
+          this._playing = false;
+          this._audio = null;
+          this._syncBtn();
+          this.browserSpeak(text, language, opts);
+        };
+
+        await audio.play();
+        this._syncBtn();
+        return true;
+      }
+    } catch (err) {
+      console.warn("Server TTS unavailable; using browser speech.", err);
+    }
+
+    return this.browserSpeak(text, language, opts);
+  },
+
+  browserSpeak(text, language, opts = {}) {
+    if (!("speechSynthesis" in window)) {
+      toast("Read-aloud is not supported in this browser.", "warn");
+      return false;
+    }
+
     this.stop();
-    const u = new SpeechSynthesisUtterance(text);
-    const v = this.voiceFor(opts.language || localStorage.getItem("bss_lang") || "English");
-    if (v) { u.voice = v; u.lang = v.lang; }
-    u.rate = opts.rate || 0.95; u.pitch = 1;
-    u.onend = () => { this._playing = false; this._syncBtn(); };
-    u.onerror = () => { this._playing = false; this._syncBtn(); };
-    this._utter = u; this._paused = false; this._playing = true;
+
+    const u = new SpeechSynthesisUtterance(String(text));
+    const v = this.voiceFor(language);
+
+    const codes = {
+      English: "en-IN",
+      Hindi: "hi-IN",
+      Marathi: "mr-IN",
+      Gujarati: "gu-IN",
+      Bengali: "bn-IN",
+      Tamil: "ta-IN",
+      Telugu: "te-IN",
+      Kannada: "kn-IN",
+      Malayalam: "ml-IN",
+      Punjabi: "pa-IN",
+      Urdu: "ur-IN"
+    };
+
+    if (v) {
+      u.voice = v;
+      u.lang = v.lang;
+    } else {
+      u.lang = codes[language] || "en-IN";
+    }
+
+    u.rate = opts.rate || 0.95;
+    u.pitch = 1;
+
+    u.onend = () => {
+      this._playing = false;
+      this._syncBtn();
+    };
+
+    u.onerror = () => {
+      this._playing = false;
+      this._syncBtn();
+    };
+
+    this._utter = u;
+    this._paused = false;
+    this._playing = true;
+
     speechSynthesis.speak(u);
     this._syncBtn();
     return true;
   },
   pause() { if (speechSynthesis.speaking) { speechSynthesis.pause(); this._paused = true; this._syncBtn(); } },
   resume() { if (this._paused) { speechSynthesis.resume(); this._paused = false; this._syncBtn(); } },
-  stop() { if ("speechSynthesis" in window) { speechSynthesis.cancel(); } this._paused = false; this._playing = false; this._syncBtn(); },
+  stop() {
+    if ("speechSynthesis" in window) {
+      speechSynthesis.cancel();
+    }
+
+    if (this._audio) {
+      try {
+        this._audio.pause();
+        this._audio.currentTime = 0;
+      } catch (_) {}
+      this._audio = null;
+    }
+
+    this._paused = false;
+    this._playing = false;
+    this._syncBtn();
+  },
   toggle(text, opts = {}) {
     if (this._playing) {
       if (this._paused) this.resume();
@@ -426,7 +621,7 @@ window.BSS_STT = (() => {
     langCode(name) {
       const codes = { English: "en-IN", Marathi: "mr-IN", Hindi: "hi-IN", Gujarati: "gu-IN",
         Bengali: "bn-IN", Tamil: "ta-IN", Telugu: "te-IN", Kannada: "kn-IN",
-        Malayalam: "ml-IN", Punjabi: "pa-IN", Urdu: "ur-PK" };
+        Malayalam: "ml-IN", Punjabi: "pa-IN", Urdu: "ur-IN" };
       return codes[name] || "en-IN";
     },
     start(language, callbacks = {}) {
@@ -508,8 +703,12 @@ window.BSS_AI = {
       const langSel = $("#aiLang");
       langSel.innerHTML = BSS_STATE.languages.map(l =>
         `<option value="${escapeHtml(l)}">${escapeHtml(l)}</option>`).join("");
-      langSel.value = localStorage.getItem("bss_lang") || "English";
+      const savedLang = localStorage.getItem("bss_lang") || "English";
+      langSel.value = BSS_STATE.languages.includes(savedLang)
+        ? savedLang
+        : (BSS_STATE.languages[0] || "English");
 
+      bindLanguagePreference();
       this.loadHistory();
     }
   },
@@ -530,10 +729,74 @@ window.BSS_AI = {
   history: [],
   async download(id) {
     try {
-      const res = await fetch(`${API_BASE}/video-dubbing/${id}/download`, {headers:{"Authorization":"Bearer "+authToken(),"X-Guest-Id":guestId()}});
-      if(!res.ok) { let d=null; try{d=await res.json()}catch{} throw new Error(d?.message||"Download failed."); }
-      const blob=await res.blob(); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`bhasha-dub-${id}.mp4`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-    } catch(e) { toast(e.message,"err"); }
+      const res = await fetch(`${API_BASE}/video-dubbing/${id}/download`, {
+        headers: {
+          "Authorization": "Bearer " + (authToken() || ""),
+          "X-Guest-Id": guestId()
+        }
+      });
+
+      if (!res.ok) {
+        let d = null;
+        try { d = await res.json(); } catch (_) {}
+        throw new Error(d?.message || "Download failed.");
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `bhasha-dub-${id}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      toast(e.message, "err");
+    }
+  },
+
+  async transcript(id, language = "source") {
+    try {
+      const data = await authFetch(
+        `/video-dubbing/${id}/transcript/${encodeURIComponent(language)}`
+      );
+
+      const text =
+        typeof data === "string"
+          ? data
+          : data?.text ||
+            data?.transcript ||
+            data?.content ||
+            JSON.stringify(data, null, 2);
+
+      this.saveTranscript(text, `bhasha-transcript-${id}-${language}.txt`);
+    } catch (e) {
+      toast(e.message, "err");
+    }
+  },
+
+  saveTranscript(text, filename = "bhasha-transcript.txt") {
+    if (!text) {
+      toast("Transcript is empty.", "warn");
+      return;
+    }
+
+    const blob = new Blob([String(text)], {
+      type: "text/plain;charset=utf-8"
+    });
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast("Transcript saved.");
   },
   async loadHistory() {
     const body = $("#aiBody");
@@ -561,7 +824,7 @@ window.BSS_AI = {
     input.value = "";
     this.renderMessage("user", text);
     this.typing(true);
-    const lang = $("#aiLang").value;
+    const lang = $("#aiLang").value || localStorage.getItem("bss_lang") || "English";
     localStorage.setItem("bss_lang", lang);
     try {
       const data = await api("/chat", {
@@ -601,7 +864,7 @@ window.BSS_AI = {
       ? `<div class="bubble">${btnText}</div>
          <div style="display:flex;flex-direction:column;gap:4px">
            <div class="actions">
-             <button onclick="BSS_VOICE.listen(this)" data-text="${btnText}" data-listening="0">🔊 Listen</button>
+             <button onclick="BSS_VOICE.listen(this)" data-text="${btnText}" data-language="${escapeHtml(localStorage.getItem("bss_lang") || "English")}" data-listening="0">🔊 Listen</button>
            </div>
          </div>`
       : `<div class="bubble">${btnText}</div>`;
@@ -632,53 +895,220 @@ window.BSS_AI = {
 
 /* ---------------- Translation tool (home page) ---------------- */
 async function doTranslate() {
-  const src = $("#transSrc"), dst = $("#transDst");
+  const src = $("#transSrc");
+  const dst = $("#transDst");
+  const srcLang = $("#transSrcLang");
   const text = (src ? src.value : "").trim();
-  const target = (dst ? dst.value : "Marathi");
-  const out = $("#transOut"), btn = $("#transBtn");
-  if (!text) { toast("Type something to translate.", "warn"); return; }
-  if (out) out.textContent = "Translating…";
-  if (btn) btn.disabled = true;
-  try {
-    const data = await api("/translate", { method: "POST", body: { text, source_language: "English", target_language: target } });
-    if (out) out.textContent = data.translated_text;
+  const target = (dst ? dst.value : "") ||
+    localStorage.getItem("bss_lang") || "Marathi";
+  const source = (srcLang ? srcLang.value : "") || "English";
+  const out = $("#transOut");
+  const btn = $("#transBtn");
+
+  if (!text) {
+    toast("Type something to translate.", "warn");
+    return;
+  }
+
+  if (source === target) {
+    if (out) out.value = text;
     const listenBtn = $("#transListen");
-    if (listenBtn) { listenBtn.dataset.text = data.translated_text; listenBtn.classList.remove("hide"); }
+    if (listenBtn) {
+      listenBtn.dataset.text = text;
+      listenBtn.dataset.language = target;
+      listenBtn.classList.remove("hide");
+    }
+    return;
+  }
+
+  if (out) {
+    if ("value" in out) out.value = "Translating…";
+    else out.textContent = "Translating…";
+  }
+  if (btn) btn.disabled = true;
+
+  try {
+    const data = await api("/translate", {
+      method: "POST",
+      body: {
+        text,
+        source_language: source,
+        target_language: target
+      }
+    });
+
+    const translated = data?.translated_text || data?.translation || "";
+
+    if (out) {
+      if ("value" in out) out.value = translated;
+      else out.textContent = translated;
+    }
+
+    const listenBtn = $("#transListen");
+    if (listenBtn) {
+      listenBtn.dataset.text = translated;
+      listenBtn.dataset.language = target;
+      listenBtn.classList.remove("hide");
+    }
   } catch (e) {
-    if (out) out.textContent = "⚠️ " + e.message;
-  } finally { if (btn) btn.disabled = false; }
+    if (out) {
+      const message = "⚠️ " + e.message;
+      if ("value" in out) out.value = message;
+      else out.textContent = message;
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 function bindTranslateTool() {
   const btn = $("#transBtn");
-  if (!btn) return;
-  btn.addEventListener("click", doTranslate);
+  const src = $("#transSrc");
+  const mic = $("#transMic");
+  const listen = $("#transListen");
+
+  if (btn && btn.dataset.bound !== "1") {
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", doTranslate);
+  }
+
+  if (src && src.dataset.bound !== "1") {
+    src.dataset.bound = "1";
+    const count = $("#transSrcCount");
+
+    src.addEventListener("input", () => {
+      if (count) count.textContent = `${src.value.length} chars`;
+    });
+  }
+
+  if (mic && mic.dataset.bound !== "1") {
+    mic.dataset.bound = "1";
+
+    mic.addEventListener("click", () => {
+      const source = $("#transSrcLang")?.value || "English";
+
+      if (!BSS_STT.supported) {
+        toast("Voice input needs Chrome or Edge.", "warn");
+        return;
+      }
+
+      BSS_STT.start(source, {
+        onChange(active) {
+          mic.textContent = active ? "⏹ Stop" : "🎤 Speak";
+        },
+
+        async onResult(text) {
+          if (src) src.value = text;
+
+          const count = $("#transSrcCount");
+          if (count) count.textContent = `${text.length} chars`;
+
+          // Automatically translate spoken input.
+          if (text.trim()) {
+            await doTranslate();
+          }
+        }
+      });
+    });
+  }
+
+  if (listen && listen.dataset.bound !== "1") {
+    listen.dataset.bound = "1";
+
+    listen.addEventListener("click", () => {
+      const text = listen.dataset.text || $("#transOut")?.value || "";
+      const language =
+        listen.dataset.language ||
+        $("#transDst")?.value ||
+        localStorage.getItem("bss_lang") ||
+        "English";
+
+      BSS_VOICE.toggle(text, { language });
+    });
+  }
+
   const swap = $("#transSwap");
-  if (swap) {
+  if (swap && swap.dataset.bound !== "1") {
+    swap.dataset.bound = "1";
+
     swap.addEventListener("click", () => {
-      const src = $("#transSrc"), dst = $("#transDst");
+      const src = $("#transSrc");
+      const dst = $("#transDst");
+
       if (!src || !dst) return;
-      const t = src.value; src.value = dst.value || "";
-      dst.value = t;
+
+      const srcLang = $("#transSrcLang");
+      const oldText = src.value;
+      const oldSource = srcLang?.value || "English";
+      const oldTarget = dst.value || "Marathi";
+
+      src.value = $("#transOut")?.value || "";
+
+      if (srcLang && [...srcLang.options].some(o => o.value === oldTarget)) {
+        srcLang.value = oldTarget;
+      }
+
+      if ([...dst.options].some(o => o.value === oldSource)) {
+        dst.value = oldSource;
+      }
+
+      if ($("#transOut")) {
+        if ("value" in $("#transOut")) $("#transOut").value = oldText;
+        else $("#transOut").textContent = oldText;
+      }
+
+      const listenBtn = $("#transListen");
+      if (listenBtn) {
+        listenBtn.dataset.text = oldText;
+        listenBtn.dataset.language = oldSource;
+      }
     });
   }
 }
 
 /* ---------------- Language preference ---------------- */
 function bindLanguagePreference() {
-  $$("select[data-langs]").forEach(sel => {
+  $$("select[data-langs], .lang-select").forEach(sel => {
+    if (sel.dataset.langBound === "1") return;
+
+    sel.dataset.langBound = "1";
+
     sel.addEventListener("change", async () => {
       const lang = sel.value;
       if (!lang) return;
+
       localStorage.setItem("bss_lang", lang);
+
+      // Keep every language selector on the page synchronized.
+      $$("select[data-langs], .lang-select").forEach(other => {
+        if (other !== sel && [...other.options].some(o => o.value === lang)) {
+          other.value = lang;
+        }
+      });
+
       const user = currentUser();
+
       if (user?.role === "student") {
         try {
-          const updated = await api("/student/language", { method: "PUT", body: { language_preference: lang } });
-          setAuth(authToken(), updated);
+          const updated = await api("/student/language", {
+            method: "PUT",
+            body: { language_preference: lang }
+          });
+
+          if (updated) {
+            setAuth(authToken(), updated);
+          } else {
+            user.language_preference = lang;
+            setAuth(authToken(), user);
+          }
+
           toast("Preferred language updated: " + lang);
-        } catch (e) { toast(e.message, "err"); }
-      } else { toast("Preferred language set to " + lang); }
+        } catch (e) {
+          toast(e.message, "err");
+        }
+      } else {
+        toast("Preferred language set to " + lang);
+      }
     });
   });
 }
@@ -729,17 +1159,145 @@ window.BSS_VIDEO = {
     const steps = ["Received", "Transcribing", "Translating", "Generating voice", "Synchronizing"];
     const complete = status === "dubbed";
     $("#videoStatusBox").innerHTML = `<div class='video-status-card'><div class='status-badge ${complete?"success":"working"}'>${complete?"✓":"⟳"} ${escapeHtml(label)}</div><div class='video-steps'>${steps.map((x,i)=>`<span class='${complete||i < (status==="preparing"?2:status==="dubbing"?4:1)?"done":""}'>${complete||i < (status==="preparing"?2:status==="dubbing"?4:1)?"✓":"○"} ${x}</span>`).join("")}</div><p><b>${escapeHtml(BSS_LANG_NAMES[job.source_language]||job.source_language||"Auto")}</b> → <b>${escapeHtml(BSS_LANG_NAMES[job.target_language]||job.target_language)}</b></p>${job.error_message?`<div class='video-error'>${escapeHtml(job.error_message)}</div>`:""}</div>`;
-    if (complete) $("#videoResult").innerHTML = `<div class='video-result'><h3>🎉 Dubbed lesson ready</h3><p>Your translated media is ready in ${escapeHtml(BSS_LANG_NAMES[job.target_language]||job.target_language)}.</p><a class='btn btn-primary' href='#' onclick='BSS_VIDEO.download(${job.id});return false'>▶ Open / Download</a></div>`, $("#videoResult").classList.remove("hide");
+    if (complete && $("#videoResult")) {
+      $("#videoResult").innerHTML = `
+        <div class="video-result">
+          <h3>🎉 Dubbed lesson ready</h3>
+          <p>
+            Your translated media is ready in
+            ${escapeHtml(BSS_LANG_NAMES[job.target_language] || job.target_language)}.
+          </p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <a class="btn btn-primary" href="#"
+              onclick="BSS_VIDEO.download(${job.id});return false">
+              ▶ Open / Download Video
+            </a>
+            <a class="btn btn-outline" href="#"
+              onclick="BSS_VIDEO.transcript(${job.id},'source');return false">
+              📄 Save Original Transcript
+            </a>
+            <a class="btn btn-outline" href="#"
+              onclick="BSS_VIDEO.transcript(${job.id},'${escapeHtml(job.target_language || "source")}');return false">
+              🌐 Save Translated Transcript
+            </a>
+          </div>
+        </div>`;
+
+      $("#videoResult").classList.remove("hide");
+    }
   },
   async download(id) {
     try {
-      const res = await fetch(`${API_BASE}/video-dubbing/${id}/download`, {headers:{"Authorization":"Bearer "+authToken(),"X-Guest-Id":guestId()}});
-      if(!res.ok) { let d=null; try{d=await res.json()}catch{} throw new Error(d?.message||"Download failed."); }
-      const blob=await res.blob(); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`bhasha-dub-${id}.mp4`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-    } catch(e) { toast(e.message,"err"); }
+      const res = await fetch(`${API_BASE}/video-dubbing/${id}/download`, {
+        headers: {
+          "Authorization": "Bearer " + (authToken() || ""),
+          "X-Guest-Id": guestId()
+        }
+      });
+
+      if (!res.ok) {
+        let d = null;
+        try { d = await res.json(); } catch (_) {}
+        throw new Error(d?.message || "Download failed.");
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `bhasha-dub-${id}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      toast(e.message, "err");
+    }
+  },
+
+  async transcript(id, language = "source") {
+    try {
+      const data = await authFetch(
+        `/video-dubbing/${id}/transcript/${encodeURIComponent(language)}`
+      );
+
+      const text =
+        typeof data === "string"
+          ? data
+          : data?.text ||
+            data?.transcript ||
+            data?.content ||
+            JSON.stringify(data, null, 2);
+
+      this.saveTranscript(text, `bhasha-transcript-${id}-${language}.txt`);
+    } catch (e) {
+      toast(e.message, "err");
+    }
+  },
+
+  saveTranscript(text, filename = "bhasha-transcript.txt") {
+    if (!text) {
+      toast("Transcript is empty.", "warn");
+      return;
+    }
+
+    const blob = new Blob([String(text)], {
+      type: "text/plain;charset=utf-8"
+    });
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast("Transcript saved.");
   },
   async loadHistory() {
-    try { const rows = await authFetch("/video-dubbing"); $("#videoHistoryGrid").innerHTML = rows.length ? rows.map(j=>`<div class='card'><div class='lesson-meta'><span class='chip lang'>${escapeHtml(BSS_LANG_NAMES[j.target_language]||j.target_language)}</span><span class='chip ${j.status==="dubbed"?"pub":"gray"}'>${escapeHtml(j.status)}</span></div><h3>${escapeHtml(j.original_filename||j.source_url||"Video translation")}</h3><p>${fmtDate(j.created_at)}</p>${j.status==="dubbed"?`<a class='btn btn-primary btn-sm' href='#' onclick='BSS_VIDEO.download(${j.id});return false'>▶ Open / Download</a>`:""}</div>`).join(""):'<div class="empty">No video translations yet.</div>'; } catch(e) { if($("#videoHistoryGrid")) $("#videoHistoryGrid").innerHTML='<div class="empty">Login to use video translation.</div>'; }
+    try {
+      const rows = await authFetch("/video-dubbing");
+      $("#videoHistoryGrid").innerHTML = rows.length
+        ? rows.map(j => `
+          <div class="card">
+            <div class="lesson-meta">
+              <span class="chip lang">
+                ${escapeHtml(BSS_LANG_NAMES[j.target_language] || j.target_language)}
+              </span>
+              <span class="chip ${j.status === "dubbed" ? "pub" : "gray"}">
+                ${escapeHtml(j.status)}
+              </span>
+            </div>
+            <h3>${escapeHtml(j.original_filename || j.source_url || "Video translation")}</h3>
+            <p>${fmtDate(j.created_at)}</p>
+            ${j.status === "dubbed" ? `
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <a class="btn btn-primary btn-sm" href="#"
+                  onclick="BSS_VIDEO.download(${j.id});return false">
+                  ▶ Video
+                </a>
+                <a class="btn btn-outline btn-sm" href="#"
+                  onclick="BSS_VIDEO.transcript(${j.id},'source');return false">
+                  📄 Original TXT
+                </a>
+                <a class="btn btn-outline btn-sm" href="#"
+                  onclick="BSS_VIDEO.transcript(${j.id},'${escapeHtml(j.target_language || "source")}');return false">
+                  🌐 Translation TXT
+                </a>
+              </div>
+            ` : ""}
+          </div>
+        `).join("")
+        : '<div class="empty">No video translations yet.</div>';
+    } catch (e) {
+      if ($("#videoHistoryGrid")) {
+        $("#videoHistoryGrid").innerHTML =
+          '<div class="empty">Login to use video translation.</div>';
+      }
+    }
   }
 };
 
@@ -779,6 +1337,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   $$(".burger").forEach(b => b.addEventListener("click", () => $(".nav-links")?.classList.toggle("open")));
 
   await loadSiteConfig();
+  populateLanguageSelects();
+  bindLanguagePreference();
   loadTextContent();
   loadAnnouncements();
   loadFAQs();
