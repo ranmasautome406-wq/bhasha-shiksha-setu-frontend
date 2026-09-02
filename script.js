@@ -2,7 +2,7 @@
 // Replace the URL below after deploying the separate backend.
 const API_BASE_URL =
   localStorage.getItem("bss_api_url") ||
-  "https://bhasha-shiksha-setu-backend.onrender.com";
+  "https://YOUR-BACKEND-URL.onrender.com";
 
 /* =========================================================
    Bhasha Shiksha Setu — shared frontend logic
@@ -888,7 +888,13 @@ window.BSS_AI = {
     const lang = ($("#aiLang") || {}).value || "English";
     BSS_STT.start(lang, {
       onChange: (on) => { mic.classList.toggle("rec", on); mic.textContent = on ? "⏹" : "🎤"; },
-      onResult: (text) => { this.setInput(text); },
+      onResult: async (text) => {
+        this.setInput(text);
+        // Voice question should be submitted automatically after recognition.
+        if (text && text.trim()) {
+          setTimeout(() => this.send(), 150);
+        }
+      },
     });
   },
 };
