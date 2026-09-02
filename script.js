@@ -2,7 +2,7 @@
 // Replace the URL below after deploying the separate backend.
 const API_BASE_URL =
   localStorage.getItem("bss_api_url") ||
-  "https://YOUR-BACKEND-URL.onrender.com";
+  "https://bhasha-shiksha-setu-backend.onrender.com";
 
 /* =========================================================
    Bhasha Shiksha Setu — shared frontend logic
