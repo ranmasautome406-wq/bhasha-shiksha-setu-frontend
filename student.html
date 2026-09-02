@@ -45,6 +45,9 @@
     <button class="side-item" data-view="tutor"><span class="s-ico">🤖</span> AI Tutor</button>
     <button class="side-item" data-view="progress"><span class="s-ico">📊</span> Progress</button>
     <button class="side-item" data-view="saved"><span class="s-ico">🔖</span> Saved</button>
+    <button class="side-item" data-view="materials"><span class="s-ico">📄</span> Materials</button>
+    <button class="side-item" data-view="video"><span class="s-ico">🎬</span> Video Translator</button>
+    <button class="side-item" data-view="practice"><span class="s-ico">📝</span> Practice</button>
     <button class="side-item" data-view="settings"><span class="s-ico">⚙️</span> Settings</button>
   </aside>
 
@@ -126,6 +129,53 @@
       <div class="grid g3" id="savedGrid" style="margin-top:24px"></div>
     </section>
 
+    <!-- Materials -->
+    <section data-view-panel="materials" class="hide">
+      <div class="greet"><h1>📄 Study Materials</h1><p>Access educational PDFs, notes and resources shared by the administrator.</p></div>
+      <div class="grid g3" id="studentMaterialsGrid" style="margin-top:24px"></div>
+    </section>
+
+    <!-- AI Video Translator -->
+    <section data-view-panel="video" class="hide">
+      <div class="greet"><h1>🎬 AI Video Translator</h1><p>Turn a permitted educational video into a dubbed learning experience in your preferred language.</p></div>
+      <div class="video-translator-grid">
+        <div class="sec-card">
+          <h2>Translate & Dub</h2>
+          <p class="muted">Upload a video or paste a public video URL that you have permission to process.</p>
+          <div class="video-input-tabs"><button class="filter-pill active" id="videoUploadTab">Upload video</button><button class="filter-pill" id="videoUrlTab">Video URL</button></div>
+          <div id="videoUploadBox" class="video-source-box">
+            <input type="file" id="videoFile" accept="video/*,audio/*" hidden>
+            <button class="btn btn-primary" id="chooseVideo">🎥 Choose video</button>
+            <span id="videoFileName" class="muted">No file selected</span>
+          </div>
+          <div id="videoUrlBox" class="video-source-box hide">
+            <input id="videoUrl" class="text-input" type="url" placeholder="https://example.com/video.mp4">
+          </div>
+          <div class="video-form-grid">
+            <label>Source language <select id="videoSourceLang"><option value="auto">Auto detect</option><option value="en">English</option><option value="hi">Hindi</option><option value="mr">Marathi</option><option value="gu">Gujarati</option><option value="bn">Bengali</option><option value="ta">Tamil</option><option value="te">Telugu</option></select></label>
+            <label>Translate to <select id="videoTargetLang"><option value="en">English</option><option value="hi">Hindi</option><option value="mr" selected>Marathi</option><option value="gu">Gujarati</option><option value="bn">Bengali</option><option value="ta">Tamil</option><option value="te">Telugu</option></select></label>
+          </div>
+          <button class="btn btn-primary" id="startVideoDub" style="margin-top:18px;width:100%">✨ Translate & Dub</button>
+          <p class="video-note">Processing happens securely through the backend. Your API key is never exposed to the browser.</p>
+        </div>
+        <div class="sec-card">
+          <div class="view-head" style="margin-top:0"><h2>Translation status</h2><button class="btn btn-soft btn-sm" id="videoRefresh">Refresh</button></div>
+          <div id="videoStatusBox" class="video-status-empty">Choose a video to start.</div>
+          <div id="videoResult" class="hide"></div>
+        </div>
+      </div>
+      <div class="view-head"><h2>🕘 My video translations</h2></div>
+      <div class="grid g2" id="videoHistoryGrid"></div>
+    </section>
+
+    <!-- Practice -->
+    <section data-view-panel="practice" class="hide">
+      <div class="greet"><h1>📝 Smart Practice</h1><p>Your practice should respond to what you understand—not just give you more questions.</p></div>
+      <div class="sec-card" id="learningProfileCard"><h2>Personal learning profile</h2><p class="muted">Loading your learning insights…</p></div>
+      <div class="view-head"><h2>🎯 Recommended practice</h2></div>
+      <div class="grid g3" id="recommendationGrid"></div>
+    </section>
+
     <!-- Settings -->
     <section data-view-panel="settings" class="hide">
       <div class="greet"><h1>⚙️ Settings</h1><p>Your preferences and account.</p></div>
@@ -199,6 +249,9 @@ function switchView(name) {
   $$(".side-item").forEach(b => b.classList.toggle("active", b.dataset.view === name));
   $$("[data-view-panel]").forEach(p => p.classList.toggle("hide", p.dataset.viewPanel !== name));
   if (name === "explore") BSS_LESSONS.render("#lessonGrid");
+  if (name === "materials") BSS_MATERIALS.render("#studentMaterialsGrid");
+  if (name === "video") { BSS_VIDEO.loadHistory(); }
+  if (name === "practice") { BSS_LEARNING.load(); }
 }
 
 function studentCard(l, d) {
