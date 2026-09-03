@@ -1333,7 +1333,7 @@ window.BSS_MATERIALS = {
       host.innerHTML = rows.length ? rows.map(m => `
         <div class="card"><div class="ico-tile tile-v">📄</div><h3>${escapeHtml(m.title || m.original_name || "Study Material")}</h3>
         <p>${escapeHtml(m.description || m.category || "Educational material")}</p>
-        <a class="btn btn-primary btn-sm" href="${escapeHtml(m.url || "#")}" target="_blank" rel="noopener">Open Material →</a></div>`).join("")
+        <a class="btn btn-primary btn-sm" href="${escapeHtml(API_ROOT + (m.url || ""))}" target="_blank" rel="noopener">Open Material →</a></div>`).join("")
         : '<div class="empty" style="grid-column:1/-1"><div class="big">📄</div>No study materials available yet.</div>';
     } catch (e) { host.innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="big">⚠️</div>${escapeHtml(e.message)}</div>`; }
   }
