@@ -1,8 +1,14 @@
 // Bhasha Shiksha Setu - Frontend API configuration
 // Replace the URL below after deploying the separate backend.
-const API_BASE_URL =
-  localStorage.getItem("bss_api_url") ||
-  "https://YOUR-BACKEND-URL.onrender.com";
+const DEPLOYED_BACKEND_URL = "https://bhasha-shiksha-setu-backend.onrender.com";
+
+// Always use the deployed backend unless an explicit BSS_CONFIG override is provided.
+// Ignore stale localStorage values from older deployments (e.g. YOUR-BACKEND-URL).
+const storedApiUrl = localStorage.getItem("bss_api_url") || "";
+const API_BASE_URL = /YOUR-BACKEND|localhost|127\.0\.0\.1/i.test(storedApiUrl)
+  ? DEPLOYED_BACKEND_URL
+  : (storedApiUrl || DEPLOYED_BACKEND_URL);
+try { localStorage.setItem("bss_api_url", API_BASE_URL); } catch (_) {}
 
 /* =========================================================
    Bhasha Shiksha Setu — shared frontend logic
